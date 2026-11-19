@@ -21,9 +21,19 @@
 
   function scriptBase() {
     var s = document.querySelector('script[src*="runners.js"]');
-    return s ? s.src.replace(/runners\.js.*$/, "") : "js/";
+    return s ? s.src.replace(/runners\.js.*$/, "") : new URL("js/", location.href).href;
   }
   var BASE = scriptBase();
+
+  /* The single-file build (codle.html) embeds worker sources; run them from Blob URLs. */
+  function makeWorker(name) {
+    var inline = window.CODLE_WORKERS && window.CODLE_WORKERS[name];
+    if (inline) {
+      var url = URL.createObjectURL(new Blob([inline], { type: "text/javascript" }));
+      return new Worker(url);
+    }
+    return new Worker(BASE + name + ".js");
+  }
   // A local copy (js/vendor/pyodide/, see scripts/vendor-pyodide.sh) wins over the CDN.
   var PYODIDE_URLS = [BASE + "vendor/pyodide/", "https://cdn.jsdelivr.net/npm/pyodide@0.26.4/"];
   var runSeq = 0;
@@ -44,7 +54,7 @@
 
   /* Workers can't start from file:// pages in some browsers; these run on the main thread instead. */
   function runJavaScriptInline(code) {
-    return loadScript(BASE + "format.js").then(function () {
+    return (window.CodleFormat ? Promise.resolve() : loadScript(BASE + "format.js")).then(function () {
       var out = "", err = "";
       var fmt = window.CodleFormat;
       var fake = {
@@ -65,8 +75,9 @@
   }
 
   function runLuaInline(code) {
-    return loadScript(BASE + "vendor/fengari-web.js")
-      .then(function () { return loadScript(BASE + "lua-runner.js"); })
+    var ready = window.fengari && window.CodleLua ? Promise.resolve() :
+      loadScript(BASE + "vendor/fengari-web.js").then(function () { return loadScript(BASE + "lua-runner.js"); });
+    return ready
       .then(function () {
         var r = window.CodleLua.runLua(window.fengari, code);
         return result(r.stdout, r.error ? r.error + "\n" : "");
@@ -105,7 +116,7 @@
     return new Promise(function (resolve) {
       var worker;
       try {
-        worker = new Worker(BASE + "js-worker.js");
+        worker = makeWorker("js-worker");
       } catch (err) {
         resolve(runJavaScriptInline(code));
         return;
@@ -144,7 +155,7 @@
     return new Promise(function (resolve) {
       var worker;
       try {
-        worker = new Worker(BASE + "lua-worker.js");
+        worker = makeWorker("lua-worker");
       } catch (err) {
         resolve(runLuaInline(code));
         return;
@@ -173,7 +184,7 @@
 
   function pyWorker() {
     if (!py.worker) {
-      py.worker = new Worker(BASE + "py-worker.js");
+      py.worker = makeWorker("py-worker");
       py.ready = false;
     }
     return py.worker;

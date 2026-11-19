@@ -6,7 +6,9 @@ Each language has 6 lessons, 7 quiz questions, 4 challenges, and a free playgrou
 
 ## Run it
 
-It is a static site with no build step needed at runtime. Serve the folder over HTTP (Web Workers don't start from `file://` in every browser):
+**Quickest:** open `codle.html`. It's the whole app in one self-contained file (CSS, scripts, and lessons inlined), so it works when downloaded on its own, double-clicked from disk, or opened in any HTML viewer. Python needs an internet connection the first time it runs, to download Pyodide.
+
+`index.html` is the multi-file version. On its own it renders as an unstyled page, because it loads `css/` and `js/` by relative path. It is a static site with no build step needed at runtime. Serve the folder over HTTP (Web Workers don't start from `file://` in every browser):
 
 ```bash
 npm run serve        # python3 -m http.server 8080, then open http://localhost:8080
@@ -37,7 +39,7 @@ If a compile service or the Pyodide download can't be reached (offline, or insid
 All lessons, quizzes, and challenges live in `content/<language>.md`, in a small Markdown dialect documented at the top of `scripts/content-parser.mjs`. After editing, rebuild the bundle the app loads:
 
 ```bash
-npm run build        # content/*.md  ->  js/content.js
+npm run build        # content/*.md -> js/content.js, then rebuilds codle.html
 ```
 
 ### Accuracy checks
