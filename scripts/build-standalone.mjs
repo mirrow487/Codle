@@ -28,7 +28,7 @@ const workerScript = `<script>window.CODLE_WORKERS = ${safe(JSON.stringify(worke
 html = html.replace(/<script src="(js\/[^"]+)"><\/script>/g, (_, f) => {
   let extra = "";
   if (f === "js/runners.js") {
-    extra = ["js/format.js", "js/vendor/fengari-web.js", "js/lua-runner.js"].map((d) => `<script>\n${safe(read(d))}\n</script>\n`).join("") + workerScript + "\n";
+    extra = ["js/format.js", "js/vendor/fengari-web.js", "js/lua-runner.js", "js/vendor/anthropic-sdk.js"].map((d) => `<script>\n${safe(read(d))}\n</script>\n`).join("") + workerScript + "\n";
   }
   return extra + `<script>\n${safe(read(f))}\n</script>`;
 });

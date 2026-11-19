@@ -131,6 +131,94 @@ check(Array.isArray(sent) && sent.at(-1).role === "user", "artifact: Rauke asks 
 check(/You are Rauke/.test(sent.at(-1).content) && /Reply in: English/.test(sent.at(-1).content) && /How do I debug this\?/.test(sent.at(-1).content), "artifact: the prompt carries Rauke's instructions, context and question");
 check((await page2.textContent(".account-via")).includes("Claude"), "artifact: signed in with the Claude account");
 
+// Bring your own key: Groq and Claude, straight from the browser (both providers faked).
+console.log("Own API key (Groq and Claude, faked)");
+const page3 = await browser.newPage({ viewport: { width: 1280, height: 900 }, locale: "tr-TR" });
+page3.on("pageerror", (e) => errors.push(e.message));
+const seen = { server: 0, groq: null, claude: null, claudeHeaders: null };
+await page3.route("https://accounts.google.com/gsi/client", (r) => r.fulfill({ contentType: "text/javascript", body: FAKE_GSI }));
+await page3.route("**/api/config", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ googleClientId: "test.apps.googleusercontent.com", raukeAvailable: false }) }));
+await page3.route("**/api/rauke", (r) => { seen.server++; r.fulfill({ status: 503, body: "{}" }); });
+const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" };
+await page3.route("https://api.groq.com/**", async (r) => {
+  if (r.request().method() === "OPTIONS") return r.fulfill({ status: 204, headers: cors });
+  const auth = r.request().headers()["authorization"];
+  if (auth !== "Bearer gsk_test") return r.fulfill({ status: 401, headers: cors, contentType: "application/json", body: JSON.stringify({ error: { message: "Invalid API Key" } }) });
+  if (r.request().url().endsWith("/models")) {
+    return r.fulfill({ headers: cors, contentType: "application/json", body: JSON.stringify({ data: [{ id: "whisper-large-v3", active: true }, { id: "llama-3.3-70b-versatile", active: true }, { id: "llama-3.1-8b-instant", active: true }] }) });
+  }
+  seen.groq = JSON.parse(r.request().postData());
+  const sse = ["Önce ", "`range` ", "sınırına bak."].map((c) => "data: " + JSON.stringify({ choices: [{ delta: { content: c } }] }) + "\n\n").join("") + "data: [DONE]\n\n";
+  return r.fulfill({ headers: { ...cors, "content-type": "text/event-stream" }, body: sse });
+});
+const ev = (type, data) => `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+await page3.route("https://api.anthropic.com/**", async (r) => {
+  if (r.request().method() === "OPTIONS") return r.fulfill({ status: 204, headers: cors });
+  if (r.request().url().includes("/v1/models")) {
+    return r.fulfill({ headers: cors, contentType: "application/json", body: JSON.stringify({ data: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"].map((id) => ({ type: "model", id, display_name: id, created_at: "2026-01-01T00:00:00Z" })), has_more: false, first_id: "a", last_id: "b" }) });
+  }
+  seen.claude = JSON.parse(r.request().postData());
+  seen.claudeHeaders = r.request().headers();
+  const body = ev("message_start", { message: { id: "msg_1", type: "message", role: "assistant", model: seen.claude.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } }) +
+    ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } }) +
+    ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: "Claude der ki: " } }) +
+    ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: "`print(i)` ekle." } }) +
+    ev("content_block_stop", { index: 0 }) +
+    ev("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 8 } }) +
+    ev("message_stop", {});
+  return r.fulfill({ headers: { ...cors, "content-type": "text/event-stream" }, body });
+});
+await page3.goto(URL_);
+await page3.evaluate(() => localStorage.clear());
+await page3.reload();
+await page3.click("[data-signin]");
+await page3.click("#fake-google");
+await page3.waitForSelector(".article-head h2");
+await page3.click(".rauke-fab");
+await page3.waitForSelector(".byok");
+check(true, "byok: with no key and no server, Rauke opens on the key setup screen");
+await page3.fill("#byok-key", "gsk_wrong");
+await page3.click(".byok button[type=submit]");
+await page3.waitForSelector(".byok-status.bad");
+check((await page3.textContent(".byok-status")).includes("kabul etmedi"), "byok: a wrong Groq key is reported");
+await page3.fill("#byok-key", "gsk_test");
+await page3.click(".byok button[type=submit]");
+await page3.waitForSelector(".byok-status.ok");
+const groqModels = await page3.$$eval("#byok-model option", (o) => o.map((x) => x.value));
+check(!groqModels.includes("whisper-large-v3") && (await page3.inputValue("#byok-model")) === "llama-3.3-70b-versatile", "byok: Groq chat models are listed and a strong one is picked");
+const stored = await page3.evaluate(() => JSON.parse(localStorage.getItem("codle:u:g_42:rauke")));
+check(stored && stored.provider === "groq" && stored.key === "gsk_test", "byok: the key is stored for this account in this browser");
+await page3.click(".byok-back");
+await page3.fill("#rauke-input", "Döngüm neden 5'e kadar gitmiyor?");
+await page3.press("#rauke-input", "Enter");
+await page3.waitForFunction(() => document.querySelector(".rauke-msg.bot code") && !document.querySelector(".rauke-msg.streaming"));
+check((await page3.textContent(".rauke-list")).includes("sınırına bak"), "byok: Groq's streamed answer is shown");
+check(seen.groq && seen.groq.model === "llama-3.3-70b-versatile" && seen.groq.messages[0].role === "system" && /You are Rauke/.test(seen.groq.messages[0].content), "byok: Groq gets Rauke's instructions and the chosen model");
+check(seen.groq && /Reply in: Turkish/.test(seen.groq.messages.at(-1).content) && /def |print|name/.test(seen.groq.messages.at(-1).content), "byok: Groq gets the learning context and code");
+check(seen.server === 0, "byok: nothing is sent to Codle's server");
+
+// Switch to Claude.
+await page3.click(".rauke-keys");
+await page3.check('input[name="byok-provider"][value="claude"]');
+await page3.fill("#byok-key", "sk-ant-test");
+await page3.click(".byok button[type=submit]");
+await page3.waitForSelector(".byok-status.ok", { timeout: 20000 });
+check((await page3.inputValue("#byok-model")) === "claude-opus-5-5", "byok: Claude defaults to Opus 5.5");
+await page3.click(".byok-back");
+await page3.fill("#rauke-input", "Bir ipucu ver");
+await page3.press("#rauke-input", "Enter");
+await page3.waitForFunction(() => /Claude der ki/.test(document.querySelector(".rauke-list").textContent) && !document.querySelector(".rauke-msg.streaming"));
+check(true, "byok: Claude's streamed answer is shown (official SDK in the browser)");
+const h = seen.claudeHeaders || {};
+check((h["x-api-key"] === "sk-ant-test" || h["authorization"] === "Bearer sk-ant-test") && h["anthropic-dangerous-direct-browser-access"] === "true", "byok: the Claude request goes straight to Anthropic with the learner's key");
+check(seen.claude && seen.claude.model === "claude-opus-5-5" && seen.claude.fallbacks === "default" && seen.claude.output_config.effort === "low", "byok: Claude request uses the chosen model, low effort and fallbacks");
+check(seen.claude && seen.claude.system[0].text.startsWith("You are Rauke") && seen.claude.messages.length === 3, "byok: Claude gets the system prompt and the conversation");
+
+// Remove the key.
+await page3.click(".rauke-keys");
+await page3.click(".byok-remove");
+check(await page3.evaluate(() => localStorage.getItem("codle:u:g_42:rauke") === null), "byok: removing the key deletes it from the browser");
+
 if (errors.length) { failures += errors.length; console.log("Page errors:\n" + errors.join("\n")); }
 await browser.close();
 console.log(failures ? `\n${failures} failure(s)` : "\nAll account and Rauke checks passed.");

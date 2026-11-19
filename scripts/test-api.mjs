@@ -162,6 +162,14 @@ await test("verifyGoogleToken rejects expired tokens", async () => {
   assert.equal(u, null);
 });
 
+await test("browser and server use the same Rauke system prompt", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../js/rauke.js", import.meta.url), "utf8");
+  const win = {};
+  new Function("window", "document", src)(Object.assign(win, { CODLE_CONFIG: {}, CodleI18n: {}, CodleMarkdown: {}, CodleAuth: {} }), {});
+  assert.equal(win.CodleRauke._system, SYSTEM_PROMPT);
+});
+
 console.log("api/config");
 await test("exposes only public settings", async () => {
   const r = res(); configHandler(req({ method: "GET" }), r);
