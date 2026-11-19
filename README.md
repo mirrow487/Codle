@@ -28,25 +28,28 @@ Optional: bundle the Python runtime locally instead of loading it from jsDelivr:
 - **Accounts**: *Sign in with Google* (Google Identity Services). Each account's progress and code drafts are saved separately, in the learner's browser (they don't sync across devices). Where Google isn't configured, Codle offers a local profile instead; inside a claude.ai Artifact it uses the viewer's Claude account.
 - **Rauke**, the raccoon mascot, is an AI tutor. The button in the bottom corner opens a chat that knows the current language, lesson or challenge, the learner's code and its latest output (learners can untick "include my code"). It answers in the interface language and gives hints before full solutions. A failed challenge offers "Ask Rauke why".
 
-### Setting up Google sign-in and Rauke
+### Rauke runs on each learner's own API key
 
-1. **Google OAuth client** – Google Cloud Console → APIs & Services → Credentials → *Create credentials* → *OAuth client ID* → *Web application*. Under *Authorized JavaScript origins* add every origin Codle runs on (for example `https://codle.example.com` and `http://localhost:8080`). Copy the client ID.
-2. **Anthropic API key** – from the Claude Console (console.anthropic.com).
-3. **Environment variables** on the server:
-   - `GOOGLE_CLIENT_ID` – the client ID from step 1 (public; served to the browser by `/api/config`)
-   - `ANTHROPIC_API_KEY` – secret; only the server function reads it
-4. **Run it**
-   - locally: `npm install`, then `GOOGLE_CLIENT_ID=... ANTHROPIC_API_KEY=... npm run dev` → http://localhost:8080
-   - on Vercel: import the repository (no build step needed; `api/*.mjs` become serverless functions) and add the two variables under *Settings → Environment Variables*.
+Rauke doesn't need a server key: every learner connects **their own** key in Rauke's panel (the key icon), so usage limits and costs belong to each learner's account.
 
-How Rauke's server function (`api/rauke.mjs`) works:
+- **Providers**: Groq (has a free tier; Codle lists the chat models the key can use and picks a strong Llama model) or Claude by Anthropic (paid; Opus 5.5, Sonnet 5.5 or Haiku 5.5, default Opus 5.5).
+- **Where the key lives**: only in that browser's storage, for that Codle account. Requests go straight from the browser to `api.groq.com` or `api.anthropic.com`; Codle's server never sees the key. Claude calls use Anthropic's official SDK, bundled for the browser in `js/vendor/anthropic-sdk.js` (loaded only when Claude is chosen), with `effort: "low"`, a cached system prompt, and server-side refusal fallbacks on Opus/Sonnet.
+- Learners get keys at console.groq.com/keys or console.anthropic.com/settings/keys, and can remove the key from the same screen.
+- Inside a claude.ai Artifact, Rauke uses the viewer's own Claude account instead (no key needed).
 
-- It accepts a request only with a valid Google ID token issued for your client ID (checked with Google), so the API key can't be used anonymously.
-- It allows 30 questions per learner per hour (counted per server instance) and caps message, code and history sizes.
-- It calls **Claude Opus 5.5** (`claude-opus-5-5`) with streaming, `effort: "low"` (fast, short tutoring replies), and a cached system prompt. Server-side refusal fallbacks are on (`fallbacks: "default"`).
-- Tests: `npm run test:api` (fake Claude client, nothing billed) and `node scripts/e2e-accounts.mjs http://localhost:8080/` (browser, with fake Google and Rauke endpoints).
+### Setting up Google sign-in
 
+1. Google Cloud Console → APIs & Services → Credentials → *Create credentials* → *OAuth client ID* → *Web application*. Under *Authorized JavaScript origins* add every origin Codle runs on (for example `https://codle.example.com` and `http://localhost:8080`).
+2. Set `GOOGLE_CLIENT_ID` on the server (served to the browser by `/api/config`), or put it in `js/config.js`. It is public, not a secret.
+3. Run locally with `npm install` then `GOOGLE_CLIENT_ID=... npm run dev`, or deploy to Vercel (no build step; `api/*.mjs` become functions) and add the variable under *Settings → Environment Variables*.
 
+### Optional: a site-wide Rauke key
+
+If you'd rather pay for Rauke yourself, also set `ANTHROPIC_API_KEY`. `api/rauke.mjs` then answers learners who haven't connected their own key. It only accepts requests with a valid Google ID token for your client ID, allows 30 questions per learner per hour (per server instance), caps request sizes, and streams Claude Opus 5.5 (`effort: "low"`, server-side refusal fallbacks).
+
+Tests: `npm run test:api` (fake Claude client, nothing billed) and `node scripts/e2e-accounts.mjs http://localhost:8080/` (browser, with fake Google, Groq, Anthropic and Rauke endpoints).
+
+## How code runs
 
 | Language | Runtime | Where |
 | --- | --- | --- |
@@ -104,7 +107,8 @@ js/markdown.js          lesson prose renderer + syntax highlighting
 js/i18n.js              interface strings for all six languages
 js/config.js            Google client ID / endpoints (public settings)
 js/auth.js              accounts: Google, Claude (in Artifacts), local profile
-js/rauke.js             Rauke chat panel and its two backends
+js/rauke.js             Rauke chat panel: own key (Groq/Claude), Artifact, or server
+js/vendor/anthropic-sdk.js  Anthropic's official SDK, bundled for browsers
 api/rauke.mjs           server function: verifies Google sign-in, streams Claude
 api/config.mjs          public config for the browser
 scripts/dev-server.mjs  local server for static files + /api
