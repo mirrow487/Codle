@@ -33,6 +33,11 @@ html = html.replace(/<script src="(js\/[^"]+)"><\/script>/g, (_, f) => {
   return extra + `<script>\n${safe(read(f))}\n</script>`;
 });
 
-if (/(src|href)="(css|js)\//.test(html)) throw new Error("A local reference was not inlined");
+// Embed images (logo, mascot, favicon) as data URIs, wherever they are referenced.
+const mime = { webp: "image/webp", png: "image/png", svg: "image/svg+xml" };
+html = html.replace(/assets\/([\w-]+)\.(webp|png|svg)/g, (_, name, ext) =>
+  `data:${mime[ext]};base64,` + readFileSync(join(root, `assets/${name}.${ext}`)).toString("base64"));
+
+if (/(src|href)="(css|js|assets)\//.test(html)) throw new Error("A local reference was not inlined");
 writeFileSync(join(root, "codle.html"), html);
 console.log(`Wrote codle.html (${(html.length / 1024).toFixed(0)} KB)`);

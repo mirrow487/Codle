@@ -8,7 +8,7 @@ const { chromium } = require("playwright");
 
 const URL_ = process.argv[2] || "http://localhost:8765/";
 const content = await (async () => {
-  const { parseAll } = await import("./content-parser.mjs");
+  const { parseAllWithTranslations: parseAll } = await import("./content-parser.mjs");
   const { dirname, join } = await import("node:path");
   const { fileURLToPath } = await import("node:url");
   return parseAll(join(dirname(fileURLToPath(import.meta.url)), "../content"));
@@ -120,6 +120,45 @@ await page.waitForTimeout(100);
 await waitIdle();
 const loopOut = await page.$eval(".pg-out-body pre", (e) => e.textContent);
 if (!/infinite loop/.test(loopOut)) fail("JS infinite loop not stopped: " + loopOut);
+
+// Interface languages: every locale, every language, every view.
+console.log("Translations");
+for (const loc of ["tr", "es", "de", "fr", "pt-BR", "en"]) {
+  await page.selectOption("#ui-lang", loc);
+  await page.waitForTimeout(450);
+  const htmlLang = await page.evaluate(() => document.documentElement.lang);
+  if (htmlLang !== loc) fail(`${loc}: <html lang> is ${htmlLang}`);
+  for (const lang of content) {
+    await setLang(lang.id);
+    const tr = loc === "en" ? null : lang.i18n[loc];
+    await setView("learn");
+    await page.click('.rail-item[data-index="0"]');
+    await page.waitForTimeout(400);
+    const title = await page.$eval(".article-head h2", (e) => e.textContent);
+    const want = tr ? tr.lessons[0].title : lang.lessons[0].title;
+    if (title !== want) fail(`${loc}/${lang.id}: lesson title "${title}", expected "${want}"`);
+    await setView("quiz");
+    const q = await page.$eval(".quiz-q", (e) => e.textContent);
+    if (!q.trim()) fail(`${loc}/${lang.id}: empty quiz question`);
+    await setView("challenges");
+    const ct = await page.$eval(".challenge h2", (e) => e.textContent);
+    const ci = await page.$eval('.rail-item[aria-current="true"]', (e) => Number(e.dataset.index));
+    const wantC = tr ? tr.challenges[ci].title : lang.challenges[ci].title;
+    if (ct !== wantC) fail(`${loc}/${lang.id}: challenge title "${ct}", expected "${wantC}"`);
+  }
+}
+// A translated HTML challenge shows translated test labels.
+await page.selectOption("#ui-lang", "tr");
+await page.waitForTimeout(400);
+await setLang("html");
+await setView("challenges");
+await page.click('.rail-item[data-index="0"]');
+await page.waitForTimeout(400);
+await page.click('.pg [data-act="primary"]');
+await page.waitForSelector("#challenge-result .checklist");
+const label = await page.$eval("#challenge-result .checklist li span:last-child", (e) => e.textContent);
+if (label !== "Paragraf bir bağlantı içeriyor") fail(`translated test label: "${label}"`);
+await page.selectOption("#ui-lang", "en");
 
 if (errors.length) { failures += errors.length; console.log("Page errors:\n" + errors.join("\n")); }
 await browser.close();

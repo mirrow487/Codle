@@ -4,6 +4,8 @@ Clear, accurate programming lessons with an in-browser playground, quizzes, and 
 
 Each language has 6 lessons, 7 quiz questions, 4 challenges, and a free playground.
 
+The interface and all lesson content are available in **English, Türkçe, Español, Deutsch, Français, and Português (Brasil)**. Codle picks the browser's language on first visit; the globe menu in the header switches it at any time.
+
 ## Run it
 
 **Quickest:** open `codle.html`. It's the whole app in one self-contained file (CSS, scripts, and lessons inlined), so it works when downloaded on its own, double-clicked from disk, or opened in any HTML viewer. Python needs an internet connection the first time it runs, to download Pyodide.
@@ -42,6 +44,12 @@ All lessons, quizzes, and challenges live in `content/<language>.md`, in a small
 npm run build        # content/*.md -> js/content.js, then rebuilds codle.html
 ```
 
+### Translations
+
+Each translation lives in `content/i18n/<locale>/<language>.md` (locales: `tr`, `es`, `de`, `fr`, `pt-BR`) and mirrors the English file's structure, but holds **prose only**: titles, explanations, quiz wording, prompts, hints, and HTML test labels. All code (examples, starters, solutions, expected output) always comes from the English file, so every verified output stays valid in every language.
+
+The build enforces this. It fails if a translation has the wrong number of lessons, questions, options, hints, or test labels; if a code block differs from the English one; if an inline code span doesn't appear in the English text; or if a code-only quiz option was changed (write `- =` to keep the English option). Interface strings are in `js/i18n.js`.
+
 ### Accuracy checks
 
 `npm run verify` runs every claim in the content through real toolchains (python3, node, Fengari, g++, java, mcs/mono, and Chromium for HTML):
@@ -52,11 +60,11 @@ npm run build        # content/*.md -> js/content.js, then rebuilds codle.html
 - JavaScript output from Codle's formatter matches real Node.js
 - HTML/CSS challenge tests and quiz claims hold in a real browser
 
-`node scripts/e2e.mjs http://localhost:8080/` drives the actual UI in Chromium: it runs every lesson, answers a quiz question, and checks every challenge (starter fails, solution passes) for each language.
+`node scripts/e2e.mjs http://localhost:8080/` drives the actual UI in Chromium: it runs every lesson, answers a quiz question, and checks every challenge (starter fails, solution passes) for each language, then switches through all six interface languages and checks that each view shows the translated content.
 
 ## Customising the look
 
-Every colour, font, radius, and timing value is a CSS custom property at the top of `css/styles.css`, with light and dark sets. Language marker colours are the `--lang-*` tokens.
+The logo, mascot, and favicon live in `assets/`. Every colour, font, radius, and timing value is a CSS custom property at the top of `css/styles.css`, with light and dark sets. Language marker colours are the `--lang-*` tokens.
 
 ## Project layout
 
@@ -69,9 +77,12 @@ js/*-worker.js          sandboxed runtimes (JavaScript, Python, Lua)
 js/format.js            Node-style console.log formatting
 js/lua-runner.js        Fengari wrapper (shared with the verifier)
 js/markdown.js          lesson prose renderer + syntax highlighting
-js/content.js           generated from content/*.md
+js/i18n.js              interface strings for all six languages
+js/content.js           generated from content/*.md and content/i18n/
 js/vendor/              CodeMirror 5, Fengari (MIT licensed)
-content/*.md            the lessons themselves
+content/*.md            the lessons themselves (English, plus all code)
+content/i18n/           lesson translations (prose only)
+assets/                 logo, mascot, favicon
 scripts/                build, verification, browser test, artifact build
 ```
 
