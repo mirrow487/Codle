@@ -28,6 +28,12 @@ await page.goto(URL_);
 await page.evaluate(() => localStorage.clear());
 await page.reload();
 await page.waitForSelector(".lang-tab");
+// Lessons need an account: on a server without Google configured, create a local profile.
+await page.click("[data-signin]");
+await page.waitForSelector("#local-name");
+await page.fill("#local-name", "Test Learner");
+await page.click(".local-form button[type=submit]");
+await page.waitForSelector(".article-head h2");
 
 async function setLang(id) {
   await page.click(`.lang-tab[data-lang="${id}"]`);

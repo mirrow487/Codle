@@ -6,9 +6,14 @@
   "scripts": {
     "build": "node scripts/build-content.mjs && node scripts/build-standalone.mjs",
     "verify": "node scripts/verify.mjs",
-    "serve": "python3 -m http.server 8080"
+    "serve": "python3 -m http.server 8080",
+    "dev": "node scripts/dev-server.mjs",
+    "test:api": "node scripts/test-api.mjs"
   },
   "devDependencies": {
     "fengari": "0.1.5"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.10.0"
   }
 }

@@ -26,6 +26,11 @@ const page =
   body.trim() + "\n";
 writeFileSync(join(out, "index.html"), page);
 cpSync(join(root, "js"), join(out, "js"), { recursive: true });
+cpSync(join(root, "assets"), join(out, "assets"), { recursive: true });
+// Inside a claude.ai Artifact there is no /api server: sign-in uses the Claude
+// account and Rauke uses the runtime's `sample` capability instead.
+const cfgPath = join(out, "js/config.js");
+writeFileSync(cfgPath, readFileSync(cfgPath, "utf8").replace(/configEndpoint: "[^"]*"/, 'configEndpoint: ""').replace(/raukeEndpoint: "[^"]*"/, 'raukeEndpoint: ""'));
 if (!existsSync(join(out, "js/vendor/pyodide/pyodide.js"))) {
   console.warn("Note: js/vendor/pyodide is missing; run scripts/vendor-pyodide.sh to bundle Python.");
 }

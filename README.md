@@ -13,7 +13,7 @@ The interface and all lesson content are available in **English, Türkçe, Espa�
 `index.html` is the multi-file version. On its own it renders as an unstyled page, because it loads `css/` and `js/` by relative path. It is a static site with no build step needed at runtime. Serve the folder over HTTP (Web Workers don't start from `file://` in every browser):
 
 ```bash
-npm run serve        # python3 -m http.server 8080, then open http://localhost:8080
+npm run dev          # static files + /api functions on http://localhost:8080
 ```
 
 Optional: bundle the Python runtime locally instead of loading it from jsDelivr:
@@ -22,7 +22,31 @@ Optional: bundle the Python runtime locally instead of loading it from jsDelivr:
 ./scripts/vendor-pyodide.sh
 ```
 
-## How code runs
+## Main menu, accounts and Rauke
+
+- **Main menu**: language cards with progress, "continue where you left off", and an introduction to Rauke. Anyone can see it; lessons, quizzes and challenges need an account.
+- **Accounts**: *Sign in with Google* (Google Identity Services). Each account's progress and code drafts are saved separately, in the learner's browser (they don't sync across devices). Where Google isn't configured, Codle offers a local profile instead; inside a claude.ai Artifact it uses the viewer's Claude account.
+- **Rauke**, the raccoon mascot, is an AI tutor. The button in the bottom corner opens a chat that knows the current language, lesson or challenge, the learner's code and its latest output (learners can untick "include my code"). It answers in the interface language and gives hints before full solutions. A failed challenge offers "Ask Rauke why".
+
+### Setting up Google sign-in and Rauke
+
+1. **Google OAuth client** – Google Cloud Console → APIs & Services → Credentials → *Create credentials* → *OAuth client ID* → *Web application*. Under *Authorized JavaScript origins* add every origin Codle runs on (for example `https://codle.example.com` and `http://localhost:8080`). Copy the client ID.
+2. **Anthropic API key** – from the Claude Console (console.anthropic.com).
+3. **Environment variables** on the server:
+   - `GOOGLE_CLIENT_ID` – the client ID from step 1 (public; served to the browser by `/api/config`)
+   - `ANTHROPIC_API_KEY` – secret; only the server function reads it
+4. **Run it**
+   - locally: `npm install`, then `GOOGLE_CLIENT_ID=... ANTHROPIC_API_KEY=... npm run dev` → http://localhost:8080
+   - on Vercel: import the repository (no build step needed; `api/*.mjs` become serverless functions) and add the two variables under *Settings → Environment Variables*.
+
+How Rauke's server function (`api/rauke.mjs`) works:
+
+- It accepts a request only with a valid Google ID token issued for your client ID (checked with Google), so the API key can't be used anonymously.
+- It allows 30 questions per learner per hour (counted per server instance) and caps message, code and history sizes.
+- It calls **Claude Opus 5.5** (`claude-opus-5-5`) with streaming, `effort: "low"` (fast, short tutoring replies), and a cached system prompt. Server-side refusal fallbacks are on (`fallbacks: "default"`).
+- Tests: `npm run test:api` (fake Claude client, nothing billed) and `node scripts/e2e-accounts.mjs http://localhost:8080/` (browser, with fake Google and Rauke endpoints).
+
+
 
 | Language | Runtime | Where |
 | --- | --- | --- |
@@ -78,6 +102,12 @@ js/format.js            Node-style console.log formatting
 js/lua-runner.js        Fengari wrapper (shared with the verifier)
 js/markdown.js          lesson prose renderer + syntax highlighting
 js/i18n.js              interface strings for all six languages
+js/config.js            Google client ID / endpoints (public settings)
+js/auth.js              accounts: Google, Claude (in Artifacts), local profile
+js/rauke.js             Rauke chat panel and its two backends
+api/rauke.mjs           server function: verifies Google sign-in, streams Claude
+api/config.mjs          public config for the browser
+scripts/dev-server.mjs  local server for static files + /api
 js/content.js           generated from content/*.md and content/i18n/
 js/vendor/              CodeMirror 5, Fengari (MIT licensed)
 content/*.md            the lessons themselves (English, plus all code)

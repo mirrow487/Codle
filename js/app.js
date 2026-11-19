@@ -6,6 +6,8 @@
   var M = window.CodleMarkdown;
   var R = window.CodleRunners;
   var I = window.CodleI18n;
+  var Auth = window.CodleAuth;
+  var Rauke = window.CodleRauke;
   var t = I.t, th = I.th;
   var esc = M.esc;
   var byId = {};
@@ -36,20 +38,36 @@
       try { localStorage.setItem("codle:" + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ }
     },
   };
-  var state = Object.assign({ lang: "python", view: "learn", pos: {}, answers: {}, solved: {} }, store.get("state", {}));
-  if (!byId[state.lang]) state.lang = "python";
-  if (!VIEWS.some(function (v) { return v.id === state.view; })) state.view = "learn";
-  var drafts = store.get("drafts", {});
+  /* Progress and drafts belong to the signed-in account. */
+  function userKey(k) { return Auth.user ? "u:" + Auth.user.id + ":" + k : "guest:" + k; }
+  var state, drafts;
+  function loadUserState() {
+    var saved = store.get(userKey("state"), null);
+    if (!saved && Auth.user) {
+      // First sign-in on this browser: carry over progress made before accounts existed.
+      saved = store.get("state", null);
+      var oldDrafts = store.get("drafts", null);
+      if (oldDrafts) store.set(userKey("drafts"), oldDrafts);
+    }
+    var view = state ? state.view : "home";
+    state = Object.assign({ lang: "python", view: "home", pos: {}, answers: {}, solved: {}, visited: {} }, saved || {});
+    state.view = view;
+    if (!state.visited) state.visited = {};
+    if (!byId[state.lang]) state.lang = "python";
+    drafts = store.get(userKey("drafts"), {});
+  }
+  loadUserState();
   var hintsShown = {};
   var saveTimer = null;
 
   I.set(store.get("locale", null) || I.detect());
   document.documentElement.lang = I.get();
 
-  function save() { store.set("state", state); }
+  function save() { store.set(userKey("state"), state); }
   function saveDrafts() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(function () { store.set("drafts", drafts); }, 300);
+    var key = userKey("drafts"), snapshot = drafts;
+    saveTimer = setTimeout(function () { store.set(key, snapshot); }, 300);
   }
   function pos(lang) {
     return state.pos[lang] || (state.pos[lang] = { lesson: 0, quiz: 0, challenge: 0 });
@@ -109,6 +127,7 @@
     store.set("locale", I.get());
     document.documentElement.lang = I.get();
     applyChrome();
+    Rauke.relabel();
     transition(function () { renderLangbar(); renderView(); });
   });
 
@@ -120,6 +139,42 @@
     $(".locale").title = t("ui.language");
     langsEl.setAttribute("aria-label", t("ui.languageTabs"));
     $("#footer-text").textContent = t("footer");
+    $("#home-btn").setAttribute("aria-label", t("nav.home"));
+    $("#home-btn").title = t("nav.home");
+    $("#home-btn .home-label").textContent = t("nav.home");
+    renderAccount();
+  }
+
+  /* ---------- Account menu ---------- */
+  document.addEventListener("click", function (e) {
+    var box = $("#account"), menu = $(".account-menu", box);
+    if (menu && !box.contains(e.target)) { menu.hidden = true; $(".account-btn", box).setAttribute("aria-expanded", "false"); }
+  });
+  function avatarHtml(u, size) {
+    if (u.picture) return '<img class="avatar" src="' + esc(u.picture) + '" alt="" width="' + size + '" height="' + size + '" referrerpolicy="no-referrer">';
+    var initial = (u.name || "?").trim().charAt(0).toUpperCase();
+    return '<span class="avatar initial" style="width:' + size + "px;height:" + size + 'px">' + esc(initial) + "</span>";
+  }
+  function renderAccount() {
+    var box = $("#account");
+    var u = Auth.user;
+    if (!u) { box.innerHTML = ""; box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML =
+      '<button class="account-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="' + esc(t("ui.account")) + '">' + avatarHtml(u, 30) + "</button>" +
+      '<div class="account-menu" role="menu" hidden>' +
+      '<div class="account-who">' + avatarHtml(u, 40) + '<div><strong></strong><span class="account-mail"></span><span class="account-via"></span></div></div>' +
+      '<button class="btn ghost account-out" type="button" role="menuitem">' + esc(t("auth.signOut")) + "</button></div>";
+    $(".account-who strong", box).textContent = u.name || "";
+    $(".account-mail", box).textContent = u.email || "";
+    $(".account-via", box).textContent = t("auth.via", { provider: t("auth.provider." + u.provider) });
+    var btn = $(".account-btn", box), menu = $(".account-menu", box);
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+      btn.setAttribute("aria-expanded", String(!menu.hidden));
+    });
+    $(".account-out", box).addEventListener("click", function () { Auth.signOut(); });
   }
 
   /* ---------- Sliding tab indicators ---------- */
@@ -155,6 +210,7 @@
 
   function setLang(id) {
     state.lang = id;
+    if (state.view === "home") state.view = "learn";
     save();
     langsEl.querySelectorAll(".lang-tab").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.lang === id)); });
     placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl));
@@ -165,6 +221,7 @@
     state.view = id;
     save();
     var views = $(".views");
+    if (!views) { transition(function () { renderLangbar(); renderView(); }); return; }
     views.querySelectorAll(".view-tab").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.view === id)); });
     placeIndicator(views, '[aria-selected="true"]', $(".view-indicator", views));
     transition(renderView);
@@ -174,17 +231,22 @@
   var langbar = $("#langbar");
   function renderLangbar() {
     var l = current();
+    var showBar = state.view !== "home" && !!Auth.user;
+    langbar.hidden = !showBar;
+    document.body.classList.toggle("at-home", state.view === "home");
+    if (!showBar) { langbar.innerHTML = ""; return; }
     langbar.innerHTML =
       '<div class="langbar-head"><div class="langbar-text">' +
       '<h1><span class="lang-dot" style="--dot: var(--lang-' + l.id + ')"></span>' + esc(l.name) + "</h1>" +
       '<p class="tagline">' + esc(l.tagline) + "</p>" +
       '<span class="runtime-chip' + (l.runner === "remote" ? " remote" : "") + '">' + esc(l.runtime) + "</span></div>" +
-      '<img class="mascot" src="assets/mascot.webp" alt="' + esc(t("ui.mascot")) + '" width="84" height="91"></div>' +
+      '<button class="mascot-btn" type="button" title="' + esc(t("rauke.open")) + '"><img class="mascot" src="assets/mascot.webp" alt="' + esc(t("ui.mascot")) + '" width="84" height="91"></button></div>' +
       '<nav class="views" role="tablist" aria-label="' + esc(t("view.section")) + '">' +
       VIEWS.map(function (v) {
         return '<button class="view-tab" type="button" role="tab" data-view="' + v.id + '" aria-selected="' + (v.id === state.view) + '">' +
           esc(t(v.key)) + (v.count ? '<span class="count">' + v.count(l) + "</span>" : "") + "</button>";
       }).join("") + '<span class="view-indicator" aria-hidden="true"></span></nav>';
+    $(".mascot-btn", langbar).addEventListener("click", function () { Rauke.open(); });
     var views = $(".views", langbar);
     views.addEventListener("click", function (e) {
       var b = e.target.closest(".view-tab");
@@ -211,8 +273,13 @@
 
   function renderView() {
     activeKeyHandler = null;
+    activePg = null;
+    raukeCtx = {};
     var l = current();
-    if (state.view === "learn") renderLearn(l);
+    Rauke.show(!!Auth.user);
+    if (state.view === "home") renderHome();
+    else if (!Auth.user) renderSignIn();
+    else if (state.view === "learn") renderLearn(l);
     else if (state.view === "quiz") renderQuiz(l);
     else if (state.view === "challenges") renderChallenges(l);
     else renderPlayground(l);
@@ -255,7 +322,7 @@
     var primaryBtn = $('[data-act="primary"]', host);
     var runBtn = $('[data-act="run"]', host);
     var channel = "c" + (++channelSeq);
-    var frame = null, consoleEl = null;
+    var frame = null, consoleEl = null, lastOutput = "";
 
     var cm = CodeMirror($(".pg-editor", host), {
       value: start,
@@ -341,6 +408,7 @@
         if (d.checks && onChecks) { onChecks(d.checks); return; }
         if (typeof d.text === "string") {
           logs.push(d);
+          lastOutput = logs.map(function (x) { return x.text; }).join("\n");
           consoleEl.innerHTML = "<pre>" + logs.map(function (x) {
             return '<span class="' + (x.stream === "stderr" ? "err" : "") + '">' + esc(x.text) + "</span>";
           }).join("\n") + "</pre>";
@@ -379,6 +447,7 @@
           }
           return r;
         }
+        lastOutput = (r.stdout || "") + (r.stderr || "");
         var note = r.via ? th("pg.via", { via: esc(r.via) }) : "";
         showText([{ text: r.stdout }, { text: r.stderr, cls: "err" }], note);
         if (r.stderr) setStatus("err", t(r.timedOut ? "pg.stopped" : "pg.error"));
@@ -402,7 +471,7 @@
     if (isHtml) renderPreview(start);
     else showReference();
 
-    return {
+    var api = {
       cm: cm,
       run: run,
       renderPreview: renderPreview,
@@ -411,7 +480,25 @@
       setValue: function (v) { cm.setValue(v); },
       getValue: function () { return cm.getValue(); },
       element: pgEl,
+      outputText: function () { return lastOutput; },
     };
+    activePg = api;
+    return api;
+  }
+
+  /* ---------- What Rauke sees ---------- */
+  var activePg = null;
+  var raukeCtx = {};
+  function setRaukeContext(ctx) { raukeCtx = ctx; Rauke.relabel(); }
+  function plainText(md) { return String(md || "").replace(/```[\s\S]*?```/g, "").replace(/[*`>#]/g, "").slice(0, 1800); }
+  function raukeContext() {
+    var c = Object.assign({}, raukeCtx);
+    if (activePg && state.view !== "home") {
+      c.code = activePg.getValue();
+      var out = activePg.outputText().trim();
+      if (out) c.output = out;
+    }
+    return c;
   }
 
   /* ---------- Rails & pager ---------- */
@@ -450,6 +537,9 @@
     var p = pos(l.id);
     if (p.lesson >= l.lessons.length) p.lesson = 0;
     var i = p.lesson, lesson = l.lessons[i];
+    (state.visited[l.id] || (state.visited[l.id] = {}))[i] = true;
+    save();
+    setRaukeContext({ language: l.name, view: "lesson", title: lesson.title, task: plainText(lesson.body), where: l.name + " · " + lesson.title });
     viewEl.innerHTML =
       '<div class="workspace">' +
       railHtml(t("view.learn"), l.lessons, i) +
@@ -495,6 +585,7 @@
     var p = pos(l.id);
     if (p.quiz >= l.quiz.length) p.quiz = 0;
     var qi = p.quiz, q = l.quiz[qi], ans = answers(l.id);
+    setRaukeContext({ language: l.name, view: "quiz", title: q.question, task: (q.code ? q.code + "\n" : "") + q.options.join(" | "), where: l.name + " · " + t("quiz.label", { n: qi + 1 }) });
     var allDone = l.quiz.every(function (_, i) { return ans[i] != null; });
     viewEl.innerHTML =
       '<div class="quiz">' +
@@ -593,6 +684,7 @@
     var p = pos(l.id);
     if (p.challenge >= l.challenges.length) p.challenge = 0;
     var ci = p.challenge, ch = l.challenges[ci];
+    setRaukeContext({ language: l.name, view: "challenges", title: ch.title, task: plainText(ch.prompt), expected: ch.expected || "", where: l.name + " · " + ch.title });
     var hk = l.id + ":" + ci;
     var shown = hintsShown[hk] || 0;
     var done = solved(l.id);
@@ -644,8 +736,11 @@
 
     function showResult(kind, titleText, bodyHtml) {
       var mascot = kind === "pass" ? '<img class="result-mascot" src="assets/mascot.webp" alt="" width="34" height="37">' : "";
+      var ask = kind === "fail" ? '<button class="btn ask-rauke" type="button"><img src="assets/rauke.webp" alt="" width="20" height="20">' + esc(t("res.askRauke")) + "</button>" : "";
       resultEl.innerHTML = '<div class="result ' + kind + ' reveal"><div class="result-head">' + mascot + "<span>" + esc(titleText) + "</span></div>" +
-        (bodyHtml ? '<div class="result-body">' + bodyHtml + "</div>" : "") + "</div>";
+        (bodyHtml || ask ? '<div class="result-body">' + (bodyHtml || "") + (ask ? '<div class="helper-row">' + ask + "</div>" : "") + "</div>" : "") + "</div>";
+      var b = $(".ask-rauke", resultEl);
+      if (b) b.addEventListener("click", function () { Rauke.open(t("rauke.q.why")); });
     }
 
     function diffHtml(expected, got) {
@@ -737,6 +832,7 @@
 
   /* ---------- Playground ---------- */
   function renderPlayground(l) {
+    setRaukeContext({ language: l.name, view: "playground", where: l.name + " · " + t("view.playground") });
     viewEl.innerHTML =
       '<div class="article">' +
       '<header class="article-head"><div class="eyebrow">' + esc(t("view.playground")) + "</div><h2>" + esc(t("free.title")) + "</h2>" +
@@ -751,10 +847,118 @@
     });
   }
 
+  /* ---------- Main menu ---------- */
+  function progressOf(l) {
+    var v = Object.keys(state.visited[l.id] || {}).length;
+    var a = Object.keys(state.answers[l.id] || {}).length;
+    var c = Object.keys(state.solved[l.id] || {}).filter(function (k) { return state.solved[l.id][k]; }).length;
+    return { lessons: Math.min(v, l.lessons.length), quiz: Math.min(a, l.quiz.length), challenges: Math.min(c, l.challenges.length) };
+  }
+  function bar(label, n, total) {
+    var pct = total ? Math.round((n / total) * 100) : 0;
+    return '<div class="meter"><div class="meter-top"><span>' + esc(label) + '</span><span class="num">' + n + "/" + total + "</span></div>" +
+      '<div class="meter-track"><span style="width:' + pct + '%"></span></div></div>';
+  }
+  function renderHome() {
+    var u = Auth.user;
+    var last = loc(byId[state.lang]);
+    var lp = pos(last.id);
+    var started = Object.keys(state.visited).length > 0;
+    viewEl.innerHTML =
+      '<div class="home">' +
+      '<section class="home-hero">' +
+      '<div class="home-hero-text"><h1>' + esc(u ? t("home.hello", { name: (u.name || "").split(" ")[0] }) : t("home.helloGuest")) + "</h1>" +
+      '<p class="summary">' + esc(t("home.sub")) + "</p>" +
+      '<div class="helper-row">' +
+      (u
+        ? '<button class="btn primary big" type="button" data-continue>' + esc(started ? t("home.continue") : t("home.startFirst")) + " →</button>" +
+          (started ? '<span class="home-last">' + esc(last.name + " · " + last.lessons[Math.min(lp.lesson, last.lessons.length - 1)].title) + "</span>" : "")
+        : '<button class="btn primary big" type="button" data-signin>' + esc(t("home.signIn")) + "</button>") +
+      "</div></div>" +
+      '<img class="home-mascot" src="assets/mascot.webp" alt="' + esc(t("ui.mascot")) + '" width="168" height="182"></section>' +
+      '<h2 class="home-h2">' + esc(t("home.languages")) + "</h2>" +
+      '<div class="lang-grid">' + LANGS.map(function (raw, i) {
+        var l = loc(raw), pr = progressOf(raw);
+        return '<article class="lang-card" style="--dot: var(--lang-' + l.id + "); --i:" + i + '">' +
+          '<header><span class="lang-dot"></span><h3>' + esc(l.name) + "</h3></header>" +
+          '<p class="lang-card-tag">' + esc(l.tagline) + "</p>" +
+          (u ? '<div class="meters">' + bar(t("home.lessons"), pr.lessons, l.lessons.length) + bar(t("home.quiz"), pr.quiz, l.quiz.length) + bar(t("home.challenges"), pr.challenges, l.challenges.length) + "</div>" : "") +
+          '<div class="lang-card-links">' +
+          '<button class="btn" type="button" data-go-lang="' + l.id + '" data-go-view="learn">' + esc(t("view.learn")) + "</button>" +
+          '<button class="btn ghost" type="button" data-go-lang="' + l.id + '" data-go-view="quiz">' + esc(t("view.quiz")) + "</button>" +
+          '<button class="btn ghost" type="button" data-go-lang="' + l.id + '" data-go-view="challenges">' + esc(t("view.challenges")) + "</button>" +
+          "</div></article>";
+      }).join("") + "</div>" +
+      '<section class="rauke-card"><img src="assets/rauke.webp" alt="" width="72" height="72">' +
+      "<div><h2>" + esc(t("home.meetRauke")) + "</h2><p>" + esc(t("home.raukeBody")) + "</p>" +
+      (u ? '<button class="btn" type="button" data-ask>' + esc(t("home.askRauke")) + "</button>" : "") + "</div></section>" +
+      "</div>";
+    viewEl.querySelectorAll("[data-go-lang]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        state.lang = b.dataset.goLang;
+        state.view = b.dataset.goView;
+        save();
+        langsEl.querySelectorAll(".lang-tab").forEach(function (x) { x.setAttribute("aria-selected", String(x.dataset.lang === state.lang)); });
+        placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl));
+        transition(function () { renderLangbar(); renderView(); window.scrollTo({ top: 0 }); });
+      });
+    });
+    var c = $("[data-continue]", viewEl);
+    if (c) c.addEventListener("click", function () { setView("learn"); });
+    var si = $("[data-signin]", viewEl);
+    if (si) si.addEventListener("click", function () { setView("learn"); });
+    var ask = $("[data-ask]", viewEl);
+    if (ask) ask.addEventListener("click", function () { Rauke.open(); });
+  }
+
+  function goHome() {
+    state.view = "home";
+    save();
+    transition(function () { renderLangbar(); renderView(); window.scrollTo({ top: 0 }); });
+  }
+
+  /* ---------- Sign in ---------- */
+  function renderSignIn() {
+    var providers = Auth.providers;
+    viewEl.innerHTML =
+      '<section class="signin">' +
+      '<img src="assets/rauke.webp" alt="" width="96" height="96">' +
+      "<h1>" + esc(t("auth.title")) + "</h1>" +
+      '<p class="summary">' + esc(t("auth.body")) + "</p>" +
+      '<div class="signin-options">' +
+      (providers.length ? "" : '<p class="dim">' + esc(t("auth.loading")) + "</p>") +
+      (providers.indexOf("google") >= 0 ? '<div id="google-btn" class="google-btn"></div>' : "") +
+      (providers.indexOf("claude") >= 0 ? '<button class="btn primary big" type="button" data-claude>' + esc(t("auth.claude")) + "</button>" : "") +
+      (providers.indexOf("local") >= 0
+        ? '<form class="local-form"><h2>' + esc(t("auth.localTitle")) + "</h2><p>" + esc(t("auth.localBody")) + "</p>" +
+          (Auth.googleError ? '<p class="dim">' + esc(t("auth.googleError", { msg: Auth.googleError })) + "</p>" : "") +
+          '<label for="local-name">' + esc(t("auth.localName")) + '</label><div class="helper-row"><input id="local-name" maxlength="40" autocomplete="given-name">' +
+          '<button class="btn primary" type="submit">' + esc(t("auth.localCreate")) + "</button></div></form>"
+        : "") +
+      "</div></section>";
+    var g = $("#google-btn");
+    if (g) Auth.renderGoogleButton(g, { locale: I.get(), theme: document.documentElement.getAttribute("data-theme") === "dark" ? "filled_black" : "outline" });
+    var cb = $("[data-claude]", viewEl);
+    if (cb) cb.addEventListener("click", function () { Auth.signInWithClaude(); });
+    var form = $(".local-form", viewEl);
+    if (form) form.addEventListener("submit", function (e) { e.preventDefault(); Auth.signInLocal($("#local-name").value); });
+  }
+
+  Auth.onChange(function () {
+    loadUserState();
+    renderAccount();
+    langsEl.querySelectorAll(".lang-tab").forEach(function (b) { b.setAttribute("aria-selected", String(b.dataset.lang === state.lang)); });
+    placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl), true);
+    transition(function () { renderLangbar(); renderView(); });
+  });
+  $("#home-btn").addEventListener("click", goHome);
+  Rauke.init({ getContext: raukeContext });
+
   /* ---------- Boot ---------- */
   applyChrome();
   renderLangbar();
   renderView();
+  Auth.init();
   function placeAll() {
     placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl), true);
     var views = $(".views");
@@ -769,7 +973,6 @@
   });
   $(".brand").addEventListener("click", function (e) {
     e.preventDefault();
-    if (state.view !== "learn") setView("learn");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    goHome();
   });
 })();
