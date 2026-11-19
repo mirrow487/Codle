@@ -1,0 +1,14 @@
+{
+  "name": "codle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Codle: friendly, accurate programming lessons with an in-browser playground.",
+  "scripts": {
+    "build": "node scripts/build-content.mjs",
+    "verify": "node scripts/verify.mjs",
+    "serve": "python3 -m http.server 8080"
+  },
+  "devDependencies": {
+    "fengari": "0.1.5"
+  }
+}
