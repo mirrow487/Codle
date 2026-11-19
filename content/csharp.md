@@ -264,7 +264,7 @@ A `Dictionary<TKey, TValue>` maps keys to values. Reading a missing key with `di
 
 **LINQ** (from `using System.Linq;`) adds query methods to every collection: `Where` filters, `Select` transforms, and `Sum`, `Max`, `Count`, and friends summarise.
 
-> `Console.WriteLine(myList)` prints `System.Collections.Generic.List`1[System.Int32]`, which is accurate and completely unhelpful. Use `string.Join(", ", myList)` to see the contents.
+> `Console.WriteLine(myList)` prints the list's type name rather than its contents, which is accurate and completely unhelpful. Use `string.Join(", ", myList)` to see the contents.
 
 ## Example
 ```csharp

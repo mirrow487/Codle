@@ -5,6 +5,8 @@
   var LANGS = window.CODLE_CONTENT;
   var M = window.CodleMarkdown;
   var R = window.CodleRunners;
+  var I = window.CodleI18n;
+  var t = I.t, th = I.th;
   var esc = M.esc;
   var byId = {};
   LANGS.forEach(function (l) { byId[l.id] = l; });
@@ -16,13 +18,13 @@
     lua: "lua main.lua",
     cpp: "g++ -std=c++17 main.cpp -o main && ./main",
     java: "java Main.java",
-    csharp: "dotnet new console, paste into Program.cs, then dotnet run",
   };
+  function localRun(id) { return id === "csharp" ? t("local.csharp") : LOCAL_RUN[id] || ""; }
   var VIEWS = [
-    { id: "learn", label: "Lessons", count: function (l) { return l.lessons.length; } },
-    { id: "quiz", label: "Quiz", count: function (l) { return l.quiz.length; } },
-    { id: "challenges", label: "Challenges", count: function (l) { return l.challenges.length; } },
-    { id: "playground", label: "Playground" },
+    { id: "learn", key: "view.learn", count: function (l) { return l.lessons.length; } },
+    { id: "quiz", key: "view.quiz", count: function (l) { return l.quiz.length; } },
+    { id: "challenges", key: "view.challenges", count: function (l) { return l.challenges.length; } },
+    { id: "playground", key: "view.playground" },
   ];
 
   /* ---------- Persistence (per-browser conveniences only) ---------- */
@@ -41,6 +43,9 @@
   var hintsShown = {};
   var saveTimer = null;
 
+  I.set(store.get("locale", null) || I.detect());
+  document.documentElement.lang = I.get();
+
   function save() { store.set("state", state); }
   function saveDrafts() {
     clearTimeout(saveTimer);
@@ -52,29 +57,70 @@
   function answers(lang) { return state.answers[lang] || (state.answers[lang] = {}); }
   function solved(lang) { return state.solved[lang] || (state.solved[lang] = {}); }
 
+  /* Content in the current interface language, falling back to English per field. */
+  var locCache = {};
+  function loc(l) {
+    var key = l.id + "|" + I.get();
+    if (locCache[key]) return locCache[key];
+    var tr = l.i18n && l.i18n[I.get()];
+    if (!tr) return (locCache[key] = l);
+    function pick(base, over, fields) {
+      var o = Object.assign({}, base);
+      if (over) fields.forEach(function (f) { if (over[f] != null && over[f] !== "") o[f] = over[f]; });
+      return o;
+    }
+    return (locCache[key] = Object.assign({}, l, {
+      tagline: tr.tagline || l.tagline,
+      runtime: tr.runtime || l.runtime,
+      lessons: l.lessons.map(function (x, i) { return pick(x, tr.lessons[i], ["title", "summary", "body"]); }),
+      quiz: l.quiz.map(function (x, i) { return pick(x, tr.quiz[i], ["question", "options", "explain"]); }),
+      challenges: l.challenges.map(function (x, i) { return pick(x, tr.challenges[i], ["title", "prompt", "hints", "tests"]); }),
+    }));
+  }
+  function current() { return loc(byId[state.lang]); }
+
   function norm(s) {
     return String(s || "").replace(/\r/g, "").split("\n").map(function (l) { return l.replace(/\s+$/, ""); }).join("\n").replace(/\n+$/, "");
   }
   function $(sel, root) { return (root || document).querySelector(sel); }
-  function el(html) {
-    var t = document.createElement("template");
-    t.innerHTML = html.trim();
-    return t.content.firstElementChild;
-  }
   var isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
   var KBD = isMac ? "⌘ ↵" : "Ctrl ↵";
+  function code(s) { return "<code>" + esc(s) + "</code>"; }
 
   /* ---------- Theme ---------- */
   var root = document.documentElement;
   var savedTheme = store.get("theme", null);
   if (savedTheme) root.setAttribute("data-theme", savedTheme);
   $("#theme-toggle").addEventListener("click", function () {
-    var current = root.getAttribute("data-theme") ||
+    var cur = root.getAttribute("data-theme") ||
       (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    var next = current === "dark" ? "light" : "dark";
+    var next = cur === "dark" ? "light" : "dark";
     root.setAttribute("data-theme", next);
     store.set("theme", next);
   });
+
+  /* ---------- Interface language ---------- */
+  var localeSel = $("#ui-lang");
+  localeSel.innerHTML = I.locales.map(function (l) {
+    return '<option value="' + l.id + '"' + (l.id === I.get() ? " selected" : "") + ">" + esc(l.name) + "</option>";
+  }).join("");
+  localeSel.addEventListener("change", function () {
+    I.set(localeSel.value);
+    store.set("locale", I.get());
+    document.documentElement.lang = I.get();
+    applyChrome();
+    transition(function () { renderLangbar(); renderView(); });
+  });
+
+  function applyChrome() {
+    $(".brand").setAttribute("aria-label", t("ui.home"));
+    $("#theme-toggle").setAttribute("aria-label", t("ui.theme"));
+    $("#theme-toggle").title = t("ui.theme");
+    localeSel.setAttribute("aria-label", t("ui.language"));
+    $(".locale").title = t("ui.language");
+    langsEl.setAttribute("aria-label", t("ui.languageTabs"));
+    $("#footer-text").textContent = t("footer");
+  }
 
   /* ---------- Sliding tab indicators ---------- */
   function placeIndicator(container, activeSel, indicator, instant) {
@@ -126,17 +172,18 @@
 
   /* ---------- Language bar ---------- */
   var langbar = $("#langbar");
-  function renderLangbar(instant) {
-    var l = byId[state.lang];
+  function renderLangbar() {
+    var l = current();
     langbar.innerHTML =
-      '<div class="langbar-head"><div>' +
+      '<div class="langbar-head"><div class="langbar-text">' +
       '<h1><span class="lang-dot" style="--dot: var(--lang-' + l.id + ')"></span>' + esc(l.name) + "</h1>" +
-      '<p class="tagline">' + esc(l.tagline) + "</p></div>" +
+      '<p class="tagline">' + esc(l.tagline) + "</p>" +
       '<span class="runtime-chip' + (l.runner === "remote" ? " remote" : "") + '">' + esc(l.runtime) + "</span></div>" +
-      '<nav class="views" role="tablist" aria-label="Section">' +
+      '<img class="mascot" src="assets/mascot.webp" alt="' + esc(t("ui.mascot")) + '" width="84" height="91"></div>' +
+      '<nav class="views" role="tablist" aria-label="' + esc(t("view.section")) + '">' +
       VIEWS.map(function (v) {
         return '<button class="view-tab" type="button" role="tab" data-view="' + v.id + '" aria-selected="' + (v.id === state.view) + '">' +
-          v.label + (v.count ? '<span class="count">' + v.count(l) + "</span>" : "") + "</button>";
+          esc(t(v.key)) + (v.count ? '<span class="count">' + v.count(l) + "</span>" : "") + "</button>";
       }).join("") + '<span class="view-indicator" aria-hidden="true"></span></nav>';
     var views = $(".views", langbar);
     views.addEventListener("click", function (e) {
@@ -164,7 +211,7 @@
 
   function renderView() {
     activeKeyHandler = null;
-    var l = byId[state.lang];
+    var l = current();
     if (state.view === "learn") renderLearn(l);
     else if (state.view === "quiz") renderQuiz(l);
     else if (state.view === "challenges") renderChallenges(l);
@@ -184,22 +231,21 @@
     var isHtml = lang.id === "html";
     var draft = drafts[o.key];
     var start = typeof draft === "string" ? draft : o.original;
-    var primaryLabel = o.primaryLabel || (isHtml ? "Run" : "Run");
     host.innerHTML =
       '<div class="pg' + (o.tall ? " tall" : "") + '">' +
       '<div class="pg-bar"><span class="pg-file"><span class="lang-dot" style="--dot: var(--lang-' + lang.id + ')"></span>' +
-      "<span>" + esc(lang.filename) + '</span><span class="edited" hidden>edited</span></span>' +
+      "<span>" + esc(lang.filename) + '</span><span class="edited" hidden>' + esc(t("pg.edited")) + "</span></span>" +
       '<div class="pg-actions">' +
-      '<button class="btn ghost" type="button" data-act="reset" title="Restore the original code">' +
+      '<button class="btn ghost" type="button" data-act="reset" title="' + esc(t("pg.resetTitle")) + '">' +
       '<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-      (o.resetLabel || "Reset example") + "</button>" +
-      (o.secondary ? '<button class="btn" type="button" data-act="run">Run</button>' : "") +
+      esc(o.resetLabel || t("pg.reset")) + "</button>" +
+      (o.secondary ? '<button class="btn" type="button" data-act="run">' + esc(t("pg.run")) + "</button>" : "") +
       '<button class="btn primary" type="button" data-act="primary">' +
       '<svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4l14 8-14 8z" fill="currentColor"/></svg>' +
-      primaryLabel + " <kbd>" + KBD + "</kbd></button>" +
+      esc(o.primaryLabel || t("pg.run")) + " <kbd>" + KBD + "</kbd></button>" +
       "</div></div>" +
       '<div class="pg-body"><div class="pg-editor"></div>' +
-      '<div class="pg-out"><div class="pg-out-head"><span>' + (isHtml ? "Preview" : "Output") + '</span><span class="status">Ready</span></div>' +
+      '<div class="pg-out"><div class="pg-out-head"><span>' + esc(t(isHtml ? "pg.preview" : "pg.output")) + '</span><span class="status">' + esc(t("pg.ready")) + "</span></div>" +
       '<div class="pg-out-body"></div></div></div></div>';
 
     var pgEl = $(".pg", host);
@@ -235,7 +281,7 @@
         Esc: function (c) { c.getInputField().blur(); },
       },
     });
-    cm.getWrapperElement().setAttribute("aria-label", lang.name + " code editor");
+    cm.getWrapperElement().setAttribute("aria-label", t("pg.editor", { lang: lang.name }));
     setTimeout(function () { cm.refresh(); }, 0);
     setTimeout(function () { cm.refresh(); }, 260);
 
@@ -259,34 +305,34 @@
       if (runBtn) runBtn.disabled = on;
     }
 
-    function showText(parts, note, noteKind) {
+    function showText(parts, noteHtml, noteKind) {
       var html = "";
       parts.forEach(function (p) {
         if (!p.text) return;
         html += '<span class="' + (p.cls || "") + '">' + esc(p.text) + "</span>";
       });
-      outBody.innerHTML = '<pre class="reveal">' + (html || '<span class="dim">(no output)</span>') + "</pre>" +
-        (note ? '<div class="out-note reveal' + (noteKind ? " " + noteKind : "") + '">' + note + "</div>" : "");
+      outBody.innerHTML = '<pre class="reveal">' + (html || '<span class="dim">' + esc(t("pg.noOutput")) + "</span>") + "</pre>" +
+        (noteHtml ? '<div class="out-note reveal' + (noteKind ? " " + noteKind : "") + '">' + noteHtml + "</div>" : "");
     }
 
-    function showReference(note) {
+    function showReference() {
       if (o.reference == null) {
-        outBody.innerHTML = '<pre><span class="dim">Press Run to execute this code.</span></pre>';
-        setStatus("", "Ready");
+        outBody.innerHTML = '<pre><span class="dim">' + esc(t("pg.pressRun")) + "</span></pre>";
+        setStatus("", t("pg.ready"));
         return;
       }
-      showText([{ text: o.reference, cls: "dim" }], note || "This is the example's expected output. Press <b>Run</b> to execute it live.");
-      setStatus("ref", "Expected output");
+      showText([{ text: o.reference, cls: "dim" }], th("pg.expectedNote"));
+      setStatus("ref", t("pg.expected"));
     }
 
     /* HTML preview */
-    function renderPreview(code, checks, onChecks) {
+    function renderPreview(src, checks, onChecks) {
       var logs = [];
       outBody.innerHTML = "";
       frame = document.createElement("iframe");
       frame.className = "preview-frame reveal";
       frame.setAttribute("sandbox", "allow-scripts");
-      frame.setAttribute("title", "Preview of your HTML");
+      frame.setAttribute("title", t("pg.previewTitle"));
       consoleEl = document.createElement("div");
       consoleEl.className = "console-strip";
       outBody.appendChild(frame);
@@ -300,44 +346,43 @@
           }).join("\n") + "</pre>";
         }
       };
-      frame.srcdoc = R.htmlDocument(code, channel, checks);
-      setStatus("ok", "Rendered");
+      frame.srcdoc = R.htmlDocument(src, channel, checks);
+      setStatus("ok", t("pg.rendered"));
     }
 
     function run() {
-      var code = cm.getValue();
+      var src = cm.getValue();
       if (isHtml) {
-        renderPreview(code);
+        renderPreview(src);
         return Promise.resolve({ html: true });
       }
       busy(true);
-      setStatus("running", "Running…");
-      outBody.innerHTML = '<pre><span class="dim">Running…</span></pre>';
+      setStatus("running", t("pg.running"));
+      outBody.innerHTML = '<pre><span class="dim">' + esc(t("pg.running")) + "</span></pre>";
       var t0 = performance.now();
-      return R.run(lang.id, code, function (msg) {
-        setStatus("running", "Running…");
+      return R.run(lang.id, src, function (msg) {
+        setStatus("running", t("pg.running"));
         outBody.innerHTML = '<pre><span class="dim">' + esc(msg) + "</span></pre>";
       }).then(function (r) {
         busy(false);
         var ms = Math.round(performance.now() - t0);
         if (r.unreachable) {
-          var unchanged = norm(code) === norm(o.original);
+          var unchanged = norm(src) === norm(o.original);
           if (unchanged && o.reference != null) {
-            showText([{ text: o.reference }], esc(r.reason) + " Showing the verified output of this exact code instead.", "warn");
-            setStatus("ref", "Verified output");
+            showText([{ text: o.reference }], esc(r.reason) + " " + th("pg.verifiedNote"), "warn");
+            setStatus("ref", t("pg.verified"));
           } else {
-            outBody.innerHTML = '<pre><span class="dim">Not run.</span></pre>' +
-              '<div class="out-note warn reveal">' + esc(r.reason) +
-              (o.reference != null ? " <b>Reset example</b> to see its verified output, or run" : " You can run") +
-              " your version locally with <code>" + esc(LOCAL_RUN[lang.id] || "") + "</code>.</div>";
-            setStatus("err", "Not run");
+            outBody.innerHTML = '<pre><span class="dim">' + esc(t("pg.notRunBody")) + "</span></pre>" +
+              '<div class="out-note warn reveal">' + esc(r.reason) + " " +
+              th(o.reference != null ? "pg.resetForVerified" : "pg.runLocally", { cmd: code(localRun(lang.id)) }) + "</div>";
+            setStatus("err", t("pg.notRun"));
           }
           return r;
         }
-        var note = r.via ? "Compiled and run on " + esc(r.via) + "." : "";
+        var note = r.via ? th("pg.via", { via: esc(r.via) }) : "";
         showText([{ text: r.stdout }, { text: r.stderr, cls: "err" }], note);
-        if (r.stderr) setStatus("err", r.timedOut ? "Stopped" : "Error");
-        else setStatus("ok", "Done in " + (ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s"));
+        if (r.stderr) setStatus("err", t(r.timedOut ? "pg.stopped" : "pg.error"));
+        else setStatus("ok", t("pg.doneIn", { time: ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s" }));
         return r;
       });
     }
@@ -370,20 +415,20 @@
   }
 
   /* ---------- Rails & pager ---------- */
-  function railHtml(label, items, current, doneMap) {
-    return '<nav class="rail" aria-label="' + label + '"><p class="rail-label">' + label + "</p>" +
+  function railHtml(label, items, cur, doneMap) {
+    return '<nav class="rail" aria-label="' + esc(label) + '"><p class="rail-label">' + esc(label) + "</p>" +
       items.map(function (it, i) {
-        return '<button class="rail-item' + (doneMap && doneMap[i] ? " done" : "") + '" type="button" data-index="' + i + '" aria-current="' + (i === current) + '">' +
+        return '<button class="rail-item' + (doneMap && doneMap[i] ? " done" : "") + '" type="button" data-index="' + i + '" aria-current="' + (i === cur) + '">' +
           '<span class="rail-num">' + (doneMap && doneMap[i] ? "✓" : i + 1) + "</span>" +
           '<span class="rail-text">' + (it.small ? "<small>" + esc(it.small) + "</small>" : "") + esc(it.title) + "</span></button>";
       }).join("") + "</nav>";
   }
 
-  function pagerHtml(items, i, noun) {
+  function pagerHtml(items, i, prevLabel, nextLabel) {
     var prev = items[i - 1], next = items[i + 1];
     return '<div class="pager">' +
-      (prev ? '<button class="btn prev" type="button" data-go="' + (i - 1) + '"><span><small>Previous ' + noun + "</small>← " + esc(prev.title) + "</span></button>" : "<span></span>") +
-      (next ? '<button class="btn next" type="button" data-go="' + (i + 1) + '"><span><small>Next ' + noun + "</small>" + esc(next.title) + " →</span></button>" : "<span></span>") +
+      (prev ? '<button class="btn prev" type="button" data-go="' + (i - 1) + '"><span><small>' + esc(prevLabel) + "</small>← " + esc(prev.title) + "</span></button>" : "<span></span>") +
+      (next ? '<button class="btn next" type="button" data-go="' + (i + 1) + '"><span><small>' + esc(nextLabel) + "</small>" + esc(next.title) + " →</span></button>" : "<span></span>") +
       "</div>";
   }
 
@@ -391,8 +436,7 @@
     container.addEventListener("click", function (e) {
       var b = e.target.closest("[data-index], [data-go]");
       if (!b || !container.contains(b)) return;
-      var i = Number(b.dataset.index != null ? b.dataset.index : b.dataset.go);
-      go(i);
+      go(Number(b.dataset.index != null ? b.dataset.index : b.dataset.go));
     });
   }
 
@@ -408,14 +452,14 @@
     var i = p.lesson, lesson = l.lessons[i];
     viewEl.innerHTML =
       '<div class="workspace">' +
-      railHtml("Lessons", l.lessons, i) +
+      railHtml(t("view.learn"), l.lessons, i) +
       '<article class="article">' +
-      '<header class="article-head"><div class="eyebrow">Lesson ' + (i + 1) + " of " + l.lessons.length + "</div>" +
+      '<header class="article-head"><div class="eyebrow">' + esc(t("lesson.of", { n: i + 1, total: l.lessons.length })) + "</div>" +
       "<h2>" + esc(lesson.title) + "</h2>" + (lesson.summary ? '<p class="summary">' + esc(lesson.summary) + "</p>" : "") + "</header>" +
       '<div class="prose">' + M.render(lesson.body) + "</div>" +
-      '<div class="eyebrow">Try it</div>' +
+      '<div class="eyebrow">' + esc(t("lesson.try")) + "</div>" +
       '<div id="lesson-pg"></div>' +
-      pagerHtml(l.lessons, i, "lesson") +
+      pagerHtml(l.lessons, i, t("lesson.prev"), t("lesson.next")) +
       "</article></div>";
     createPlayground($("#lesson-pg"), {
       lang: l.id,
@@ -427,7 +471,7 @@
       if (n === pos(l.id).lesson) return;
       pos(l.id).lesson = n;
       save();
-      transition(function () { renderLearn(l); scrollToContent(); });
+      transition(function () { renderLearn(current()); scrollToContent(); });
     });
   }
 
@@ -435,8 +479,8 @@
   var activeKeyHandler = null;
   document.addEventListener("keydown", function (e) {
     if (!activeKeyHandler) return;
-    var t = e.target;
-    if (t && (t.closest(".CodeMirror") || /INPUT|TEXTAREA|SELECT/.test(t.tagName))) return;
+    var tg = e.target;
+    if (tg && (tg.closest(".CodeMirror") || /INPUT|TEXTAREA|SELECT/.test(tg.tagName))) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     activeKeyHandler(e);
   });
@@ -454,11 +498,11 @@
     var allDone = l.quiz.every(function (_, i) { return ans[i] != null; });
     viewEl.innerHTML =
       '<div class="quiz">' +
-      '<div class="quiz-nav"><div class="eyebrow">Question ' + (qi + 1) + " of " + l.quiz.length + "</div>" +
+      '<div class="quiz-nav"><div class="eyebrow">' + esc(t("quiz.of", { n: qi + 1, total: l.quiz.length })) + "</div>" +
       '<div class="quiz-dots" role="list">' + l.quiz.map(function (qq, i) {
         var a = ans[i];
         var cls = a == null ? "" : a === qq.answer ? " right" : " wrong";
-        return '<button class="quiz-dot' + cls + '" type="button" role="listitem" data-index="' + i + '" aria-current="' + (i === qi) + '" aria-label="Question ' + (i + 1) + '">' + (i + 1) + "</button>";
+        return '<button class="quiz-dot' + cls + '" type="button" role="listitem" data-index="' + i + '" aria-current="' + (i === qi) + '" aria-label="' + esc(t("quiz.label", { n: i + 1 })) + '">' + (i + 1) + "</button>";
       }).join("") + "</div></div>" +
       '<div class="quiz-card">' +
       '<div class="quiz-q">' + M.inline(q.question) + "</div>" +
@@ -468,12 +512,12 @@
       }).join("") + "</div>" +
       '<div class="explain"><div><div class="explain-body"></div></div></div>' +
       "</div>" +
-      '<div class="quiz-foot"><span class="hintline">Pick an answer, or press A to D.</span>' +
+      '<div class="quiz-foot"><span class="hintline">' + esc(t("quiz.pick")) + "</span>" +
       '<div class="helper-row">' +
-      (qi > 0 ? '<button class="btn ghost" type="button" data-go="' + (qi - 1) + '">← Previous</button>' : "") +
+      (qi > 0 ? '<button class="btn ghost" type="button" data-go="' + (qi - 1) + '">' + esc(t("quiz.prev")) + "</button>" : "") +
       (qi < l.quiz.length - 1
-        ? '<button class="btn primary" type="button" data-go="' + (qi + 1) + '">Next question →</button>'
-        : '<button class="btn primary" type="button" data-restart>' + (allDone ? "Start over" : "Back to question 1") + "</button>") +
+        ? '<button class="btn primary" type="button" data-go="' + (qi + 1) + '">' + esc(t("quiz.next")) + "</button>"
+        : '<button class="btn primary" type="button" data-restart>' + esc(t(allDone ? "quiz.restart" : "quiz.first")) + "</button>") +
       "</div></div></div>";
 
     var card = $(".quiz-card", viewEl);
@@ -488,11 +532,11 @@
       });
       var body = $(".explain-body", card);
       body.className = "explain-body " + (right ? "right" : "wrong");
-      body.innerHTML = "<strong>" + (right ? "Right." : "Not quite. The answer is " + "ABCD"[q.answer] + ".") + "</strong>" + M.inline(q.explain);
+      body.innerHTML = "<strong>" + esc(right ? t("quiz.right") : t("quiz.wrong", { key: "ABCD"[q.answer] })) + "</strong>" + M.inline(q.explain);
       var ex = $(".explain", card);
       if (animate) requestAnimationFrame(function () { ex.classList.add("open"); });
       else ex.classList.add("open");
-      $(".hintline", viewEl).textContent = qi < l.quiz.length - 1 ? "Press Enter for the next question." : "That was the last question.";
+      $(".hintline", viewEl).textContent = t(qi < l.quiz.length - 1 ? "quiz.enter" : "quiz.last");
     }
     if (ans[qi] != null) reveal(ans[qi], false);
 
@@ -504,14 +548,14 @@
       var dot = viewEl.querySelector('.quiz-dot[data-index="' + qi + '"]');
       dot.classList.add(i === q.answer ? "right" : "wrong");
       var restart = viewEl.querySelector("[data-restart]");
-      if (restart && l.quiz.every(function (_, k) { return ans[k] != null; })) restart.textContent = "Start over";
+      if (restart && l.quiz.every(function (_, k) { return ans[k] != null; })) restart.textContent = t("quiz.restart");
     }
 
     function go(n) {
       if (n === qi || n < 0 || n >= l.quiz.length) return;
       pos(l.id).quiz = n;
       save();
-      transition(function () { renderQuiz(l); });
+      transition(function () { renderQuiz(current()); });
     }
 
     viewEl.querySelector(".options").addEventListener("click", function (e) {
@@ -526,7 +570,7 @@
       if (l.quiz.every(function (_, k) { return ans[k] != null; })) state.answers[l.id] = {};
       pos(l.id).quiz = 0;
       save();
-      transition(function () { renderQuiz(l); });
+      transition(function () { renderQuiz(current()); });
     });
 
     activeKeyHandler = function (e) {
@@ -540,6 +584,11 @@
   }
 
   /* ---------- Challenges ---------- */
+  function hintLabel(shown, total) {
+    if (shown >= total) return t("hint.all");
+    return shown === 0 ? t("hint.first") : t("hint.more", { n: shown, total: total });
+  }
+
   function renderChallenges(l) {
     var p = pos(l.id);
     if (p.challenge >= l.challenges.length) p.challenge = 0;
@@ -550,27 +599,27 @@
     var kindCls = ch.kind.toLowerCase();
     viewEl.innerHTML =
       '<div class="workspace">' +
-      railHtml("Challenges", l.challenges.map(function (c) { return { title: c.title, small: c.kind }; }), ci, done) +
+      railHtml(t("view.challenges"), l.challenges.map(function (c) { return { title: c.title, small: t("kind." + c.kind) }; }), ci, done) +
       '<section class="challenge">' +
-      '<header class="article-head"><div class="eyebrow">Challenge ' + (ci + 1) + " of " + l.challenges.length +
-      ' &nbsp;<span class="kind-tag ' + kindCls + '">' + esc(ch.kind) + "</span></div>" +
+      '<header class="article-head"><div class="eyebrow">' + esc(t("challenge.of", { n: ci + 1, total: l.challenges.length })) +
+      ' &nbsp;<span class="kind-tag ' + kindCls + '">' + esc(t("kind." + ch.kind)) + "</span></div>" +
       "<h2>" + esc(ch.title) + "</h2></header>" +
       '<div class="challenge-prompt">' + M.render(ch.prompt) + "</div>" +
       '<div id="challenge-pg"></div>' +
       '<div id="challenge-result" aria-live="polite"></div>' +
       '<div class="helpers">' +
       '<div class="helper-row">' +
-      '<button class="btn" type="button" data-hint>' + hintLabel(shown, ch.hints.length) + "</button>" +
-      '<button class="btn ghost" type="button" data-solution aria-expanded="false">Show solution</button></div>' +
+      '<button class="btn" type="button" data-hint>' + esc(hintLabel(shown, ch.hints.length)) + "</button>" +
+      '<button class="btn ghost" type="button" data-solution aria-expanded="false">' + esc(t("sol.show")) + "</button></div>" +
       '<div class="hints">' + ch.hints.map(function (h, i) {
         return '<div class="hint' + (i < shown ? " open" : "") + '"><div><div class="hint-body"><b>' + (i + 1) + "/" + ch.hints.length + "</b><span>" + M.inline(h) + "</span></div></div></div>";
       }).join("") + "</div>" +
       '<div class="solution"><div><div class="solution-inner">' +
-      '<div class="row"><span>One correct solution. Yours can differ and still pass.</span>' +
-      '<button class="btn" type="button" data-use>Load into editor</button></div>' +
+      '<div class="row"><span>' + esc(t("sol.note")) + "</span>" +
+      '<button class="btn" type="button" data-use>' + esc(t("sol.use")) + "</button></div>" +
       '<div class="code-wrap">' + M.highlight(ch.solution, l.id) + "</div></div></div></div>" +
       "</div>" +
-      pagerHtml(l.challenges, ci, "challenge") +
+      pagerHtml(l.challenges, ci, t("challenge.prev"), t("challenge.next")) +
       "</section></div>";
 
     var resultEl = $("#challenge-result");
@@ -579,9 +628,9 @@
       key: l.id + ":challenge:" + ci,
       original: ch.starter,
       reference: null,
-      primaryLabel: "Check",
+      primaryLabel: t("pg.check"),
       secondary: l.id !== "html",
-      resetLabel: "Reset",
+      resetLabel: t("pg.resetShort"),
       onPrimary: check,
       onReset: function () { resultEl.innerHTML = ""; },
     });
@@ -593,8 +642,9 @@
       if (item) { item.classList.add("done"); item.querySelector(".rail-num").textContent = "✓"; }
     }
 
-    function showResult(kind, title, bodyHtml) {
-      resultEl.innerHTML = '<div class="result ' + kind + ' reveal"><div class="result-head">' + title + "</div>" +
+    function showResult(kind, titleText, bodyHtml) {
+      var mascot = kind === "pass" ? '<img class="result-mascot" src="assets/mascot.webp" alt="" width="34" height="37">' : "";
+      resultEl.innerHTML = '<div class="result ' + kind + ' reveal"><div class="result-head">' + mascot + "<span>" + esc(titleText) + "</span></div>" +
         (bodyHtml ? '<div class="result-body">' + bodyHtml + "</div>" : "") + "</div>";
     }
 
@@ -603,9 +653,9 @@
       var gotHtml = g.map(function (line, i) {
         return line !== e[i] ? '<span class="line-bad">' + (esc(line) || " ") + "</span>" : esc(line);
       }).join("\n");
-      if (!norm(got)) gotHtml = '<span class="line-bad">(nothing printed)</span>';
-      return '<div class="diff"><div><h4>Expected</h4><pre>' + esc(norm(expected)) + "</pre></div>" +
-        "<div><h4>Your output</h4><pre>" + gotHtml + "</pre></div></div>";
+      if (!norm(got)) gotHtml = '<span class="line-bad">' + esc(t("res.nothing")) + "</span>";
+      return '<div class="diff"><div><h4>' + esc(t("res.expected")) + "</h4><pre>" + esc(norm(expected)) + "</pre></div>" +
+        "<div><h4>" + esc(t("res.yours")) + "</h4><pre>" + gotHtml + "</pre></div></div>";
     }
 
     function check() {
@@ -616,7 +666,7 @@
           if (finished) return;
           finished = true;
           pg.busy(false);
-          showResult("fail", "The preview didn't finish loading", "<p>Check your HTML for an unclosed tag or a script error, then try again.</p>");
+          showResult("fail", t("res.htmlTimeout"), "<p>" + esc(t("res.htmlTimeoutBody")) + "</p>");
         }, 4000);
         pg.renderPreview(pg.getValue(), ch.tests, function (results) {
           if (finished) return;
@@ -624,30 +674,30 @@
           clearTimeout(timer);
           pg.busy(false);
           var pass = results.every(Boolean);
-          var list = '<ul class="checklist">' + ch.tests.map(function (t, i) {
-            return '<li class="' + (results[i] ? "yes" : "no") + '"><span class="mark">' + (results[i] ? "✓" : "✕") + "</span><span>" + esc(t.label) + "</span></li>";
+          var list = '<ul class="checklist">' + ch.tests.map(function (tc, i) {
+            return '<li class="' + (results[i] ? "yes" : "no") + '"><span class="mark">' + (results[i] ? "✓" : "✕") + "</span><span>" + esc(tc.label) + "</span></li>";
           }).join("") + "</ul>";
-          if (pass) { markSolved(); showResult("pass", "All " + results.length + " checks pass. Nicely done.", list); }
-          else showResult("fail", results.filter(Boolean).length + " of " + results.length + " checks pass", list);
+          if (pass) { markSolved(); showResult("pass", t("res.allChecks", { n: results.length }), list); }
+          else showResult("fail", t("res.someChecks", { passed: results.filter(Boolean).length, n: results.length }), list);
         });
         return;
       }
       resultEl.innerHTML = "";
       pg.run().then(function (r) {
         if (r.unreachable) {
-          showResult("info", "This can't be checked from here",
-            "<p>" + esc(r.reason) + " Run your code locally with <code>" + esc(LOCAL_RUN[l.id] || "") + "</code> and compare it with the expected output below.</p>" +
-            '<div class="diff"><div><h4>Expected output</h4><pre>' + esc(norm(ch.expected)) + "</pre></div></div>");
+          showResult("info", t("res.cantCheck"),
+            "<p>" + esc(r.reason) + " " + th("res.cantCheckBody", { cmd: code(localRun(l.id)) }) + "</p>" +
+            '<div class="diff"><div><h4>' + esc(t("res.expectedOutput")) + "</h4><pre>" + esc(norm(ch.expected)) + "</pre></div></div>");
           return;
         }
         var pass = !r.stderr && norm(r.stdout) === norm(ch.expected);
         if (pass) {
           markSolved();
-          showResult("pass", "Output matches. Challenge solved.", "");
+          showResult("pass", t("res.pass"), "");
         } else if (r.stderr && !norm(r.stdout)) {
-          showResult("fail", "Your code stopped with an error", "<p>Read the error in the output panel: it usually names the line and the problem. Then try again.</p>" + diffHtml(ch.expected, r.stdout));
+          showResult("fail", t("res.crashed"), "<p>" + esc(t("res.crashedBody")) + "</p>" + diffHtml(ch.expected, r.stdout));
         } else {
-          showResult("fail", "Not quite yet", "<p>The lines marked in red differ from what the tests expect.</p>" + diffHtml(ch.expected, r.stdout));
+          showResult("fail", t("res.notYet"), "<p>" + esc(t("res.notYetBody")) + "</p>" + diffHtml(ch.expected, r.stdout));
         }
       });
     }
@@ -666,7 +716,7 @@
     solBtn.addEventListener("click", function () {
       var sol = $(".solution", viewEl);
       var open = sol.classList.toggle("open");
-      solBtn.textContent = open ? "Hide solution" : "Show solution";
+      solBtn.textContent = t(open ? "sol.hide" : "sol.show");
       solBtn.setAttribute("aria-expanded", String(open));
     });
     $("[data-use]", viewEl).addEventListener("click", function () {
@@ -681,21 +731,16 @@
       if (n === pos(l.id).challenge) return;
       pos(l.id).challenge = n;
       save();
-      transition(function () { renderChallenges(l); scrollToContent(); });
+      transition(function () { renderChallenges(current()); scrollToContent(); });
     }
-  }
-
-  function hintLabel(shown, total) {
-    if (shown >= total) return "All hints shown";
-    return shown === 0 ? "Show a hint" : "Show another hint (" + shown + "/" + total + ")";
   }
 
   /* ---------- Playground ---------- */
   function renderPlayground(l) {
     viewEl.innerHTML =
       '<div class="article">' +
-      '<header class="article-head"><div class="eyebrow">Playground</div><h2>Scratchpad</h2>' +
-      '<p class="summary">Write anything you like in ' + esc(l.name) + ". Your code stays in this browser between visits.</p></header>" +
+      '<header class="article-head"><div class="eyebrow">' + esc(t("view.playground")) + "</div><h2>" + esc(t("free.title")) + "</h2>" +
+      '<p class="summary">' + esc(t("free.summary", { lang: l.name })) + "</p></header>" +
       '<div id="free-pg"></div></div>';
     createPlayground($("#free-pg"), {
       lang: l.id,
@@ -707,26 +752,20 @@
   }
 
   /* ---------- Boot ---------- */
+  applyChrome();
   renderLangbar();
   renderView();
-  requestAnimationFrame(function () {
+  function placeAll() {
     placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl), true);
-  });
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(function () {
-      placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl), true);
-      var views = $(".views");
-      if (views) placeIndicator(views, '[aria-selected="true"]', $(".view-indicator", views), true);
-    });
+    var views = $(".views");
+    if (views) placeIndicator(views, '[aria-selected="true"]', $(".view-indicator", views), true);
   }
+  requestAnimationFrame(placeAll);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeAll);
   var resizeTimer;
   window.addEventListener("resize", function () {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function () {
-      placeIndicator(langsEl, '[aria-selected="true"]', $(".tab-indicator", langsEl), true);
-      var views = $(".views");
-      if (views) placeIndicator(views, '[aria-selected="true"]', $(".view-indicator", views), true);
-    }, 100);
+    resizeTimer = setTimeout(placeAll, 100);
   });
   $(".brand").addEventListener("click", function (e) {
     e.preventDefault();

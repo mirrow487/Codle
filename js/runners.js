@@ -24,6 +24,7 @@
     return s ? s.src.replace(/runners\.js.*$/, "") : new URL("js/", location.href).href;
   }
   var BASE = scriptBase();
+  function t(key, vars) { return window.CodleI18n ? window.CodleI18n.t(key, vars) : key; }
 
   /* The single-file build (codle.html) embeds worker sources; run them from Blob URLs. */
   function makeWorker(name) {
@@ -87,7 +88,7 @@
   var inlinePy = null;
   function runPythonInline(code, onStatus) {
     if (!inlinePy) {
-      if (onStatus) onStatus("Loading Python… the first run downloads the interpreter (about 12 MB).");
+      if (onStatus) onStatus(t("run.pyLoading"));
       inlinePy = loadScript(PYODIDE_URLS[1] + "pyodide.js").then(function () {
         return window.loadPyodide({ indexURL: PYODIDE_URLS[1] });
       }).catch(function (e) { inlinePy = null; throw e; });
@@ -101,7 +102,7 @@
         err += String(e.message).split("\n").filter(function (l) { return !/_pyodide|pyodide\.asm/.test(l); }).join("\n") + "\n";
       }).then(function () { ns.destroy(); return result(out, err); });
     }, function (e) {
-      return result("", "", { unreachable: true, reason: "The Python interpreter (Pyodide) couldn't start on this page (" + e.message + ")." });
+      return result("", "", { unreachable: true, reason: t("run.pyFailed", { msg: e.message }) });
     });
   }
 
@@ -124,7 +125,7 @@
       var out = "", errOut = "";
       var timer = setTimeout(function () {
         worker.terminate();
-        resolve(result(out, errOut + "Execution stopped after " + JS_TIMEOUT / 1000 + "s. Is there an infinite loop?\n", { timedOut: true }));
+        resolve(result(out, errOut + t("run.stopped", { s: JS_TIMEOUT / 1000 }) + "\n", { timedOut: true }));
       }, JS_TIMEOUT);
       worker.onmessage = function (e) {
         var m = e.data;
@@ -162,7 +163,7 @@
       }
       var timer = setTimeout(function () {
         worker.terminate();
-        resolve(result("", "Execution stopped after " + LUA_TIMEOUT / 1000 + "s. Is there an infinite loop?\n", { timedOut: true }));
+        resolve(result("", t("run.stopped", { s: LUA_TIMEOUT / 1000 }) + "\n", { timedOut: true }));
       }, LUA_TIMEOUT);
       worker.onmessage = function (e) {
         clearTimeout(timer);
@@ -200,12 +201,12 @@
         return;
       }
       var out = "", errOut = "", timer = null, id = ++runSeq;
-      if (!py.ready && onStatus) onStatus("Loading Python… the first run downloads the interpreter (about 12 MB).");
+      if (!py.ready && onStatus) onStatus(t("run.pyLoading"));
       function startTimer() {
         timer = setTimeout(function () {
           worker.terminate();
           py.worker = null;
-          resolve(result(out, errOut + "Execution stopped after " + PY_TIMEOUT / 1000 + "s. Is there an infinite loop?\n", { timedOut: true }));
+          resolve(result(out, errOut + t("run.stopped", { s: PY_TIMEOUT / 1000 }) + "\n", { timedOut: true }));
         }, PY_TIMEOUT);
       }
       if (py.ready) startTimer();
@@ -214,13 +215,13 @@
         if (m.id !== id) { if (m.type === "ready") py.ready = true; return; }
         if (m.type === "ready") {
           py.ready = true;
-          if (!timer) { if (onStatus) onStatus("Running…"); startTimer(); }
+          if (!timer) { if (onStatus) onStatus(t("pg.running")); startTimer(); }
         } else if (m.type === "out") {
           if (m.stream === "stderr") errOut += m.text; else out += m.text;
         } else if (m.type === "loaderror") {
           worker.terminate();
           py.worker = null;
-          resolve(result("", "", { unreachable: true, reason: "The Python interpreter (Pyodide) couldn't start on this page (" + m.message + ")." }));
+          resolve(result("", "", { unreachable: true, reason: t("run.pyFailed", { msg: m.message }) }));
         } else if (m.type === "done") {
           clearTimeout(timer);
           resolve(result(out, errOut));
@@ -361,14 +362,14 @@
 
   function runRemote(langId, code, onStatus) {
     var spec = REMOTE[langId];
-    if (onStatus) onStatus("Compiling on a remote " + spec.label + " compiler…");
+    if (onStatus) onStatus(t("run.compiling", { lang: spec.label }));
     return viaWandbox(spec, code).catch(function () {
-      if (onStatus) onStatus("Trying another compile service…");
+      if (onStatus) onStatus(t("run.retry"));
       return viaGodbolt(spec, code);
     }).catch(function (err) {
       return result("", "", {
         unreachable: true,
-        reason: "The compile service couldn't be reached from this page (" + (err && err.message || "network error") + ").",
+        reason: t("run.unreachable", { msg: err && err.message || "network error" }),
       });
     });
   }

@@ -221,3 +221,119 @@ export function parseLanguage(lang, dir) {
 export function parseAll(dir) {
   return LANGUAGES.filter((l) => existsSync(`${dir}/${l.file}`)).map((l) => parseLanguage(l, dir));
 }
+
+// ---------------------------------------------------------------------------
+// Translations: content/i18n/<locale>/<language>.md mirror the English file's
+// structure but hold only prose. Code (examples, solutions, outputs) always
+// comes from the English file, so every verified output stays valid.
+//
+//   tagline: ...            (optional, before the first block)
+//   runtime: ...
+//   # Lesson: Title         summary: line, then the body (Markdown)
+//   # Quiz                  ## Q: question / "- option" lines ("- =" keeps the
+//                           English option, e.g. for pure code) / explain: ...
+//   # Challenge: Title      prompt, then ## Hints with "- hint" lines
+// ---------------------------------------------------------------------------
+export const LOCALES = ["tr", "es", "de", "fr", "pt-BR"];
+
+const fences = (md) => {
+  const out = [];
+  const re = /^```[^\n]*\n([\s\S]*?)^```/gm;
+  let m;
+  while ((m = re.exec(md || ""))) out.push(m[1]);
+  return out;
+};
+const spans = (md) => {
+  const noFence = String(md || "").replace(/^```[\s\S]*?^```/gm, "");
+  return new Set((noFence.match(/`[^`\n]+`/g) || []));
+};
+
+function checkProse(where, en, tr, problems) {
+  const fe = fences(en), ft = fences(tr);
+  if (fe.length !== ft.length || fe.some((f, i) => f !== ft[i])) problems.push(`${where}: code blocks must match the English text exactly`);
+  const se = spans(en);
+  for (const s of spans(tr)) if (!se.has(s)) problems.push(`${where}: inline code ${s} does not appear in the English text`);
+}
+
+export function parseTranslation(lang, path) {
+  const text = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+  const lines = text.split("\n");
+  const head = [];
+  for (const l of lines) { if (/^# /.test(l)) break; head.push(l); }
+  const { meta } = takeMeta(head);
+  const out = { tagline: meta.tagline || "", runtime: meta.runtime || "", lessons: [], quiz: [], challenges: [] };
+  const problems = [];
+  for (const b of splitTop(lines)) {
+    if (/^Lesson:/.test(b.head)) {
+      const secs = splitSections(b.lines);
+      const { meta: m, rest } = takeMeta(secs[0].lines);
+      out.lessons.push({ title: b.head.replace(/^Lesson:\s*/, ""), summary: m.summary || "", body: trimBlank(rest).join("\n") });
+    } else if (b.head === "Quiz") {
+      for (const s of splitSections(b.lines).slice(1)) {
+        const q = { question: s.head.replace(/^Q:\s*/, ""), options: [], explain: "" };
+        let mode = null;
+        for (const line of s.lines) {
+          if (/^- /.test(line)) { q.options.push(line.slice(2).trim()); mode = null; continue; }
+          const kv = /^explain:\s*(.*)$/.exec(line);
+          if (kv) { q.explain = kv[1]; mode = "explain"; continue; }
+          if (mode === "explain" && line.trim()) q.explain += " " + line.trim();
+        }
+        out.quiz.push(q);
+      }
+    } else if (/^Challenge:/.test(b.head)) {
+      const secs = splitSections(b.lines);
+      const ch = { title: b.head.replace(/^Challenge:\s*/, ""), prompt: trimBlank(takeMeta(secs[0].lines).rest).join("\n"), hints: [] };
+      for (const s of secs.slice(1)) {
+        if (s.head === "Hints") ch.hints = listItems(s.lines);
+        if (s.head === "Tests") ch.testLabels = listItems(s.lines);
+      }
+      out.challenges.push(ch);
+    } else {
+      problems.push(`unknown block "# ${b.head}"`);
+    }
+  }
+
+  // Structure and code-safety checks against the English source.
+  const ctx = path.replace(/^.*content\//, "content/");
+  if (out.lessons.length !== lang.lessons.length) problems.push(`expected ${lang.lessons.length} lessons, found ${out.lessons.length}`);
+  if (out.quiz.length !== lang.quiz.length) problems.push(`expected ${lang.quiz.length} quiz questions, found ${out.quiz.length}`);
+  if (out.challenges.length !== lang.challenges.length) problems.push(`expected ${lang.challenges.length} challenges, found ${out.challenges.length}`);
+  out.lessons.forEach((l, i) => { if (lang.lessons[i]) checkProse(`lesson ${i + 1}`, lang.lessons[i].body, l.body, problems); });
+  out.quiz.forEach((q, i) => {
+    const en = lang.quiz[i];
+    if (!en) return;
+    if (q.options.length !== en.options.length) problems.push(`quiz ${i + 1}: expected ${en.options.length} options, found ${q.options.length}`);
+    q.options = q.options.map((o, j) => (o === "=" ? en.options[j] : o));
+    q.options.forEach((o, j) => { if (en.options[j] && /^`[^`]*`$/.test(en.options[j]) && o !== en.options[j]) problems.push(`quiz ${i + 1}: code option ${j + 1} must stay identical (use "- =")`); });
+    checkProse(`quiz ${i + 1} question`, en.question, q.question, problems);
+    checkProse(`quiz ${i + 1} explanation`, en.explain, q.explain, problems);
+    if (!q.explain) problems.push(`quiz ${i + 1}: missing explanation`);
+  });
+  out.challenges.forEach((c, i) => {
+    const en = lang.challenges[i];
+    if (!en) return;
+    if (c.hints.length !== en.hints.length) problems.push(`challenge ${i + 1}: expected ${en.hints.length} hints, found ${c.hints.length}`);
+    checkProse(`challenge ${i + 1} prompt`, en.prompt, c.prompt, problems);
+    c.hints.forEach((h, j) => en.hints[j] && checkProse(`challenge ${i + 1} hint ${j + 1}`, en.hints[j], h, problems));
+    if (en.tests) {
+      const labels = c.testLabels || [];
+      if (labels.length !== en.tests.length) problems.push(`challenge ${i + 1}: expected ${en.tests.length} test labels under ## Tests, found ${labels.length}`);
+      c.tests = en.tests.map((tc, j) => ({ label: labels[j] || tc.label, expr: tc.expr }));
+    }
+    delete c.testLabels;
+  });
+  if (problems.length) throw new Error(`${ctx}:\n  - ` + problems.join("\n  - "));
+  return out;
+}
+
+export function parseAllWithTranslations(dir) {
+  return parseAll(dir).map((lang) => {
+    const i18n = {};
+    const file = LANGUAGES.find((l) => l.id === lang.id).file;
+    for (const loc of LOCALES) {
+      const p = `${dir}/i18n/${loc}/${file}`;
+      if (existsSync(p)) i18n[loc] = parseTranslation(lang, p);
+    }
+    return { ...lang, i18n };
+  });
+}
